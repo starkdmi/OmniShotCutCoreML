@@ -1,0 +1,7 @@
+# The versions the published models were converted with, on Python 3.12.
+# coremltools 9.0 supports torch up to 2.7.0. The traced graph and its MIL
+# lowering depend on the torch version, so other versions convert to other
+# bytes (scripts/convert.py).
+torch==2.7.0
+coremltools==9.0
+numpy==2.5.4

@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.derivedData/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+__pycache__/
+*.pth
+*.mlpackage/
+*.mlmodelc/
+/videos/
+/Package.resolved
+*.profraw
