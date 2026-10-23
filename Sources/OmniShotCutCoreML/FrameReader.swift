@@ -5,8 +5,9 @@ import Metal
 
 // OmniShotCut's official code decodes with `ffmpeg -s 128x96 -pix_fmt rgb24`,
 // and the model notices the difference. So the decoder's YUV is taken as it
-// is — H.264 and HEVC decoding are bit-exact — and scaled and converted with
-// libswscale's own arithmetic (Swscale.swift), ported for 8-bit 4:2:0 input.
+// is — H.264 and HEVC decoding are bit-exact — and scaled and converted to
+// the same bytes as ffmpeg's for 8-bit 4:2:0 input (FrameScaler.swift,
+// docs/frame-scaler-spec.md).
 // A 10-bit or 4:2:2 source is decoded too, as the MLX package decodes it:
 // AVFoundation converts it to 8-bit 4:2:0 itself, where ffmpeg scales it from
 // its own depth and subsampling, so its frames differ from ffmpeg's.
@@ -36,14 +37,14 @@ final class FrameReader: FrameSource {
     /// own is used. A track that mixes tagged and untagged sample
     /// descriptions is converted with the first one's matrix throughout:
     /// untagged frames are BT.601 in ffmpeg but carry the decoder's guess.
-    private let trackMatrix: SwscaleRGBTables.Matrix?
+    private let trackMatrix: YCbCrMatrix?
     /// Whether the track is H.264, whose ffmpeg decoder keeps a full-range
     /// first frame's range for every later frame.
     private let keepsFullRange: Bool
     /// Whether the first decoded frame is full range.
     private var firstFrameFullRange: Bool?
     private let metal: MetalContext
-    private var scaler: PlaneScaler?
+    private var scaler: FrameScaler?
     private var scalerColour: FrameColour?
     /// One batch converts on the GPU from one slot while the next decodes
     /// into the other; frames are read out of a slot's RGB buffer before it
@@ -70,7 +71,7 @@ final class FrameReader: FrameSource {
 
     /// The matrix and range a frame is converted with.
     private struct FrameColour: Hashable {
-        var matrix: SwscaleRGBTables.Matrix
+        var matrix: YCbCrMatrix
         var fullRange: Bool
     }
 
@@ -146,7 +147,7 @@ final class FrameReader: FrameSource {
 
     /// ffmpeg reads the stream's matrix; untagged video is BT.601 there, not
     /// guessed from the resolution.
-    private static func matrix(_ tag: String?) -> SwscaleRGBTables.Matrix {
+    private static func matrix(_ tag: String?) -> YCbCrMatrix {
         if tag == kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String { return .bt709 }
         if tag == kCMFormatDescriptionYCbCrMatrix_SMPTE_240M_1995 as String {
             return .smpte240m
@@ -167,7 +168,7 @@ final class FrameReader: FrameSource {
 
     /// The matrix and range of a decoded frame. The range is the decoder's
     /// output format's. ffmpeg's H.264 decoder keeps its full-range output
-    /// format (yuvj420p) once the first frame is full range, and swscale
+    /// format (yuvj420p) once the first frame is full range, and ffmpeg
     /// converts that format as full range, so in an H.264 track every frame
     /// after a full-range first frame is converted as full range too. Its
     /// HEVC decoder follows each frame's range.
@@ -290,28 +291,24 @@ final class FrameReader: FrameSource {
         guard let layout, let colour, !times.isEmpty else { return }
 
         if scaler?.layout != layout || scalerColour != colour {
-            scaler = try PlaneScaler(
+            scaler = try FrameScaler(
                 layout: layout, quarterTurns: quarterTurns, flipped: flipped, width: width,
-                height: height,
-                tables: SwscaleRGBTables(matrix: colour.matrix, fullRange: colour.fullRange),
+                height: height, matrix: colour.matrix, fullRange: colour.fullRange,
                 metal: metal)
             scalerColour = colour
         }
         let scaler = scaler!
-        // The intermediate lines never leave the GPU.
+        // The intermediate values never leave the GPU.
         try slot.reserve(
-            \.lines, bytes: scaler.lineBytes(frames: limit), device: device,
-            options: .storageModePrivate)
-        try slot.reserve(
-            \.chromaLines, bytes: scaler.chromaLineBytes(frames: limit), device: device,
+            \.scratch, bytes: scaler.scratchBytes(frames: limit), device: device,
             options: .storageModePrivate)
         try slot.reserve(\.rgb, bytes: limit * width * height * 3, device: device)
         guard let commandBuffer = metal.queue.makeCommandBuffer() else {
             throw OmniShotCutError.metalUnavailable("could not create a command buffer")
         }
         try scaler.encode(
-            frames: times.count, luma: slot.luma!, chroma: slot.chroma!, lines: slot.lines!,
-            chromaLines: slot.chromaLines!, rgb: slot.rgb!, into: commandBuffer)
+            frames: times.count, luma: slot.luma!, chroma: slot.chroma!, scratch: slot.scratch!,
+            rgb: slot.rgb!, into: commandBuffer)
         commandBuffer.commit()
         converting = Batch(slot: fillSlot, times: times, commandBuffer: commandBuffer)
         fillSlot ^= 1
@@ -339,8 +336,7 @@ final class FrameReader: FrameSource {
 private final class Slot {
     var luma: MTLBuffer?
     var chroma: MTLBuffer?
-    var lines: MTLBuffer?
-    var chromaLines: MTLBuffer?
+    var scratch: MTLBuffer?
     var rgb: MTLBuffer?
 
     func reserve(
@@ -355,4 +351,16 @@ private final class Slot {
         }
         self[keyPath: buffer] = made
     }
+}
+
+/// The stored size of a frame's luma plane and of its interleaved chroma
+/// plane, in pixels.
+struct PlaneLayout: Sendable, Hashable {
+    var width: Int
+    var height: Int
+    var chromaWidth: Int
+    var chromaHeight: Int
+
+    var lumaBytes: Int { width * height }
+    var chromaBytes: Int { chromaWidth * chromaHeight * 2 }
 }

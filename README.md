@@ -167,9 +167,10 @@ all 219 cuts match PyTorch's, and the verifier runs on one window in six.
 - **Decoding is ffmpeg's, bit for bit, for 8-bit 4:2:0 video.** The official
   code decodes with `ffmpeg -s 128x96 -pix_fmt rgb24`. `FrameReader` takes the
   decoder's YUV from AVFoundation (H.264 and HEVC decoding are bit-exact) and
-  runs libswscale's integer arithmetic in two Metal compute kernels — the
-  fixed-point bicubic filters, the horizontal and vertical passes, half-width
-  chroma and the YUV→RGB tables, in each frame's matrix and range — and turns
+  scales and converts it in two Metal compute kernels to the same bytes as
+  ffmpeg's scaler — fixed-point bicubic filters, horizontal then vertical,
+  half-width chroma and integer YUV→RGB, in each frame's matrix and range, as
+  [docs/frame-scaler-spec.md](docs/frame-scaler-spec.md) specifies — and turns
   and mirrors video with a display matrix as ffmpeg's autorotation does.
 - **Other sources are close, not exact.** AVFoundation converts a 10-bit or
   4:2:2 source — iPhone HDR video, ProRes — to 8-bit 4:2:0 itself, where ffmpeg
@@ -230,7 +231,9 @@ trailer and Tears of Steel — © Blender Foundation,
 
 ## License
 
-MIT, as are OmniShotCut's code and weights. See [LICENSE](LICENSE).
+MIT, as are OmniShotCut's code and weights. The model script adapts code from
+DETR and VisTR, under the Apache License 2.0. See [LICENSE](LICENSE) and
+[LICENSES](LICENSES).
 
 ```bibtex
 @article{wang2026omnishotcut,

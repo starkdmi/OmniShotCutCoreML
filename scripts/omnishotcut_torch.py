@@ -83,7 +83,10 @@ class Normalize(nn.Module):
 
 class FrozenBatchNorm2d(nn.Module):
     """DETR's FrozenBatchNorm2d (architecture/backbone.py): fixed statistics,
-    eps = 1e-5 added to the variance before the reciprocal square root."""
+    eps = 1e-5 added to the variance before the reciprocal square root.
+
+    Adapted from DETR, Copyright 2020 - present, Facebook, Inc, Apache License
+    2.0 (LICENSE); changed in 2026 to take eps as an argument."""
 
     def __init__(self, channels, eps=1e-5):
         super().__init__()
@@ -157,7 +160,11 @@ def sine_position_embedding(frames, height, width, hidden=HIDDEN, temperature=10
     official code computes it in float32 whatever the model dtype and casts
     the result). Returns [frames * height * width, hidden] in token order:
     frame, then row, then column; channels are (time, y, x), each
-    hidden // 3 wide, sine on even and cosine on odd channels."""
+    hidden // 3 wide, sine on even and cosine on odd channels.
+
+    Adapted from VisTR and DETR, Copyright 2020 - present, Facebook, Inc,
+    Apache License 2.0 (LICENSE); changed in 2026 to a function of the
+    feature-map shape without a mask, returning the tokens flattened."""
     features = hidden // 3
     scale = 2 * math.pi
     not_mask = torch.ones(1, frames, height, width, dtype=torch.bool)
